@@ -54,6 +54,28 @@ To run fully local, set the base URL to an OpenAI-compatible server:
 
 Then set the model name to whatever the server exposes (use Load models).
 
+## Deploy to Cloudflare with your own MySQL (optional)
+
+The deployed version is multi-user (register + login), backed by MySQL via Cloudflare Hyperdrive. The LLM API key and model live server-side as Worker settings; users never see or change them.
+
+```bash
+npm install
+npx wrangler hyperdrive create study-buddy-db \
+  --connection-string="mysql://USER:PASSWORD@dev.theogking.site:3306/studybuddy?sslMode=REQUIRED"
+# put the printed ID into wrangler.jsonc -> hyperdrive[0].id
+npx wrangler deploy
+npx wrangler secret put LLM_API_KEY        # the OpenRouter (or Groq) key
+npx wrangler secret put REGISTRATION_CODE  # optional invite code; unset = open registration
+```
+
+Server-side (MariaDB) config:
+
+```bash
+sudo mariadb < mysql/schema.sql        # creates database + tables
+```
+
+Requires MariaDB reachable on a public IP/domain (firewall open for 3306) with TLS enabled; Hyperdrive allows only `sslMode=REQUIRED`. Local Python usage is unchanged and still independent.
+
 ## Data
 
 - `data/studybuddy.db` - notes, quizzes, attempts

@@ -1,0 +1,20 @@
+{
+  "name": "study-buddy",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "tail": "wrangler tail"
+  },
+  "dependencies": {
+    "fflate": "^0.8.2",
+    "mysql2": "^3.24.6",
+    "unpdf": "^1.2.2"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20261103.1",
+    "typescript": "^7.0.2",
+    "wrangler": "^4.120.0"
+  }
+}

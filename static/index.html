@@ -22,7 +22,7 @@
       <nav id="noteList" class="note-list"></nav>
       <div class="sidebar-foot">
         <button id="historyBtn" class="btn ghost wide">History</button>
-        <button id="settingsBtn" class="btn ghost wide">Settings</button>
+        <button id="logoutBtn" class="btn ghost wide">Log out</button>
         <div id="providerPill" class="pill">loading</div>
       </div>
     </aside>
@@ -101,33 +101,46 @@
     </div>
   </div>
 
-  <div id="settingsModal" class="modal hidden" role="dialog" aria-modal="true">
+  <div id="authModal" class="modal hidden" role="dialog" aria-modal="true">
     <div class="sheet">
       <div class="sheet-head">
-        <h2>Settings</h2>
-        <button class="icon-btn" data-close="settingsModal" aria-label="Close">×</button>
+        <h2 id="authTitle">Sign in</h2>
+        <button class="icon-btn" data-close="authModal" aria-label="Close">×</button>
       </div>
       <label class="field">
-        <span>API base URL</span>
-        <input id="cfgBaseUrl" type="text" spellcheck="false" placeholder="https://api.groq.com/openai/v1">
+        <span>Username</span>
+        <input id="authUser" type="text" autocomplete="username" spellcheck="false">
       </label>
       <label class="field">
-        <span>Model</span>
-        <div class="row">
-          <input id="cfgModel" type="text" spellcheck="false" list="modelList" placeholder="llama-3.3-70b-versatile">
-          <button id="loadModelsBtn" type="button" class="btn small">Load models</button>
-        </div>
-        <datalist id="modelList"></datalist>
+        <span id="authPassLabel">Password</span>
+        <input id="authPass" type="password" autocomplete="current-password">
       </label>
-      <label class="field">
-        <span>API key</span>
-        <input id="cfgKey" type="password" spellcheck="false" placeholder="Paste your key">
+      <label class="field hidden" id="authCodeField">
+        <span>Invite code</span>
+        <input id="authCode" type="text" autocomplete="off" spellcheck="false">
       </label>
-      <p id="cfgHint" class="hint"></p>
-      <p class="hint">Groq offers a free key at console.groq.com/keys. To run fully local, point the base URL at an OpenAI-compatible server such as LM Studio or Ollama.</p>
+      <p id="authError" class="hint" style="color:#b33b2e"></p>
       <div class="sheet-foot">
-        <button class="btn ghost" data-close="settingsModal">Cancel</button>
-        <button id="saveSettingsBtn" class="btn primary">Save</button>
+        <button id="authToggleBtn" class="btn ghost">New here? Register</button>
+        <button id="authSubmitBtn" class="btn primary">Sign in</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="authModal" class="modal hidden" role="dialog" aria-modal="true">
+    <div class="sheet">
+      <div class="sheet-head">
+        <h2>Sign in</h2>
+        <button class="icon-btn" data-close="authModal" aria-label="Close">×</button>
+      </div>
+      <p class="hint" style="margin-bottom:12px">This deployment is locked. Enter the access password to continue.</p>
+      <label class="field">
+        <span>Password</span>
+        <input id="authPass" type="password" autocomplete="off">
+      </label>
+      <div class="sheet-foot">
+        <button class="btn ghost" data-close="authModal">Cancel</button>
+        <button id="authUnlockBtn" class="btn primary">Unlock</button>
       </div>
     </div>
   </div>

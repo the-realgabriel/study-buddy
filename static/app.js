@@ -15,10 +15,14 @@ const state = {
   note: null,
   quiz: null,
   results: null,
-  config: null,
+  user: null,
+  model: "",
   editingId: null,
   filter: "",
 };
+
+const TOKEN_KEY = "sb_auth_token";
+let authMode = "login";
 
 const TYPE_LABELS = {
   multiple_choice: "Multiple choice",
@@ -26,8 +30,13 @@ const TYPE_LABELS = {
   short_answer: "Short answer",
 };
 
+const authHeader = () => {
+  const token = localStorage.getItem(TOKEN_KEY);
+  return token ? { "X-Auth-Token": token } : {};
+};
+
 async function api(path, options = {}) {
-  const opts = { ...options, headers: { "Content-Type": "application/json", ...(options.headers || {}) } };
+  const opts = { ...options, headers: { "Content-Type": "application/json", ...authHeader(), ...(options.headers || {}) } };
   if (opts.body && typeof opts.body !== "string") opts.body = JSON.stringify(opts.body);
   const response = await fetch(path, opts);
   let data = {};
@@ -36,7 +45,13 @@ async function api(path, options = {}) {
   } catch (error) {
     data = {};
   }
-  if (!response.ok) throw new Error(data.error || `Request failed (${response.status})`);
+  if (!response.ok) {
+    if (response.status === 401 && data.auth_required) {
+      localStorage.removeItem(TOKEN_KEY);
+      openAuthModal();
+    }
+    throw new Error(data.error || `Request failed (${response.status})`);
+  }
   return data;
 }
 
@@ -60,6 +75,75 @@ function openModal(id) {
 
 function closeModal(id) {
   $(`#${id}`).classList.add("hidden");
+}
+
+function openAuthModal(mode = null) {
+  if (mode) authMode = mode;
+  const modal = $("#authModal");
+  const isRegister = authMode === "register";
+  $("#authTitle").textContent = isRegister ? "Create an account" : "Sign in";
+  $("#authSubmitBtn").textContent = isRegister ? "Register" : "Sign in";
+  $("#authToggleBtn").textContent = isRegister ? "Already registered? Sign in" : "New here? Register";
+  $("#authPassLabel").textContent = "Password" + (isRegister ? " (8+ characters)" : "");
+  $("#authPass").setAttribute("autocomplete", isRegister ? "new-password" : "current-password");
+  $("#authCodeField").classList.toggle("hidden", !isRegister);
+  $("#authError").textContent = "";
+  if (!modal.contains(document.activeElement)) {
+    $("#authUser").value = "";
+    $("#authPass").value = "";
+    $("#authCode").value = "";
+  }
+  modal.classList.remove("hidden");
+  setTimeout(() => $("#authUser").focus(), 30);
+}
+
+function toggleAuthModal() {
+  openAuthModal(authMode === "login" ? "register" : "login");
+}
+
+async function authSubmit() {
+  const username = $("#authUser").value.trim();
+  const password = $("#authPass").value;
+  const button = $("#authSubmitBtn");
+  if (!username || !password) {
+    $("#authError").textContent = "Enter a username and password.";
+    return;
+  }
+  busy(button, authMode === "login" ? "Signing in" : "Creating account");
+  try {
+    const body = { username, password };
+    if (authMode === "register") body.code = $("#authCode").value.trim();
+    const payload = await api(`/api/auth/${authMode}`, { method: "POST", body });
+    localStorage.setItem(TOKEN_KEY, payload.token);
+    state.user = payload.username;
+    state.model = payload.model;
+    $("#authModal").classList.add("hidden");
+    renderPill();
+    await refresh();
+  } catch (error) {
+    $("#authError").textContent = error.message;
+  } finally {
+    idle(button, authMode === "login" ? "Sign in" : "Register");
+  }
+}
+
+async function logoutUser() {
+  try {
+    await api("/api/auth/logout", { method: "POST" });
+  } catch (error) {
+    /* session may already be gone */
+  }
+  localStorage.removeItem(TOKEN_KEY);
+  state.user = null;
+  state.note = null;
+  state.quiz = null;
+  state.results = null;
+  state.notes = [];
+  renderNotes();
+  renderEmpty();
+  renderPill();
+  sessionStorage.clear();
+  openAuthModal("login");
 }
 
 function formatDate(iso) {
@@ -87,32 +171,27 @@ function idle(button, fallback) {
 
 function renderPill() {
   const pill = $("#providerPill");
-  const cfg = state.config;
-  if (!cfg) {
+  if (!state.user) {
     pill.className = "pill offline";
-    pill.innerHTML = `<span class="dot"></span><span>offline</span>`;
+    pill.innerHTML = `<span class="dot"></span><span>signed out</span>`;
     return;
   }
-  if (cfg.mock) {
-    pill.className = "pill";
-    pill.innerHTML = `<span class="dot"></span><span>mock mode</span>`;
-    return;
-  }
-  if (!cfg.has_key) {
+  if (!state.model) {
     pill.className = "pill offline";
-    pill.innerHTML = `<span class="dot"></span><span>no API key — open settings</span>`;
+    pill.innerHTML = `<span class="dot"></span><span>no provider configured</span>`;
     return;
   }
-  const local = /localhost|127\.0\.0\.1|0\.0\.0\.0/.test(cfg.base_url || "");
   pill.className = "pill";
-  pill.innerHTML = `<span class="dot"></span><span>${esc(cfg.model)} · ${local ? "local" : "cloud"}</span>`;
+  pill.innerHTML = `<span class="dot"></span><span>${esc(state.model)} · managed</span>`;
 }
 
-async function loadConfig() {
+async function loadMeta() {
   try {
-    state.config = await api("/api/config");
+    const meta = await api("/api/meta");
+    state.user = meta.username;
+    state.model = meta.has_key ? meta.model : "";
   } catch (error) {
-    state.config = null;
+    state.user = null;
   }
   renderPill();
 }
@@ -590,7 +669,7 @@ async function generateQuiz() {
     toast("Quiz ready.");
   } catch (error) {
     toast(error.message, "error");
-    if (/api key|key was rejected|model/i.test(error.message)) openSettings();
+    if (/api key/i.test(error.message)) toast("Ask the administrator to configure the server API key.", "error");
   } finally {
     idle(button, "Generate quiz");
   }
@@ -649,62 +728,6 @@ async function openAttempt(attemptId) {
   }
 }
 
-async function openSettings() {
-  try {
-    const config = await api("/api/config");
-    state.config = config;
-    $("#cfgBaseUrl").value = config.base_url;
-    $("#cfgModel").value = config.model;
-    $("#cfgKey").value = "";
-    $("#cfgKey").placeholder = config.has_key
-      ? `Saved (${config.key_hint}) — leave blank to keep`
-      : "Paste your key";
-    $("#cfgHint").textContent = config.mock
-      ? "Mock mode is on: quizzes are generated locally for testing."
-      : config.source === "env"
-        ? "Using the GROQ_API_KEY environment variable. Anything you save here takes priority."
-        : "The key is saved locally in data/config.json with owner-only permissions.";
-    openModal("settingsModal");
-  } catch (error) {
-    toast(error.message, "error");
-  }
-}
-
-async function saveSettings() {
-  const button = $("#saveSettingsBtn");
-  busy(button, "Saving");
-  try {
-    const body = {
-      base_url: $("#cfgBaseUrl").value.trim(),
-      model: $("#cfgModel").value.trim(),
-    };
-    const key = $("#cfgKey").value.trim();
-    if (key) body.api_key = key;
-    await api("/api/config", { method: "POST", body });
-    await loadConfig();
-    closeModal("settingsModal");
-    toast("Settings saved.");
-  } catch (error) {
-    toast(error.message, "error");
-  } finally {
-    idle(button, "Save");
-  }
-}
-
-async function loadModels() {
-  const button = $("#loadModelsBtn");
-  busy(button, "Loading");
-  try {
-    const { models } = await api("/api/models");
-    $("#modelList").innerHTML = models.map((model) => `<option value="${esc(model)}"></option>`).join("");
-    toast(`Loaded ${models.length} model${models.length === 1 ? "" : "s"}.`);
-  } catch (error) {
-    toast(error.message, "error");
-  } finally {
-    idle(button, "Load models");
-  }
-}
-
 function fileToBase64(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -746,10 +769,15 @@ function bind() {
   $("#newNoteBtn").addEventListener("click", () => openNoteModal());
   $("#saveNoteBtn").addEventListener("click", saveNote);
   $("#genBtn").addEventListener("click", generateQuiz);
-  $("#saveSettingsBtn").addEventListener("click", saveSettings);
-  $("#loadModelsBtn").addEventListener("click", loadModels);
   $("#historyBtn").addEventListener("click", showHistory);
-  $("#settingsBtn").addEventListener("click", openSettings);
+  $("#logoutBtn").addEventListener("click", logoutUser);
+  $("#authSubmitBtn").addEventListener("click", authSubmit);
+  $("#authToggleBtn").addEventListener("click", toggleAuthModal);
+  for (const field of ["#authUser", "#authPass", "#authCode"]) {
+    $(field).addEventListener("keydown", (event) => {
+      if (event.key === "Enter") authSubmit();
+    });
+  }
   $("#importBtn").addEventListener("click", () => $("#fileInput").click());
   $("#fileInput").addEventListener("change", (event) => {
     const file = event.target.files[0];
@@ -795,11 +823,16 @@ function bind() {
   });
 }
 
+async function refresh() {
+  await Promise.all([loadMeta(), loadNotes()]);
+  renderNotes();
+  if (state.note) renderNoteView();
+  else renderEmpty();
+}
+
 async function init() {
   bind();
-  await Promise.all([loadConfig(), loadNotes()]);
-  renderNotes();
-  renderEmpty();
+  await refresh();
 }
 
 document.addEventListener("DOMContentLoaded", init);
