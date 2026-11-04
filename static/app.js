@@ -15,14 +15,18 @@ const state = {
   note: null,
   quiz: null,
   results: null,
+  tutor: null,
   user: null,
   model: "",
   editingId: null,
   filter: "",
 };
 
+let pendingFileIds = [];
+
 const TOKEN_KEY = "sb_auth_token";
 let authMode = "login";
+let registrationOpen = false;
 
 const TYPE_LABELS = {
   multiple_choice: "Multiple choice",
@@ -69,6 +73,12 @@ function toast(message, kind = "ok") {
   }, 4000);
 }
 
+function setDrawer(open) {
+  document.body.classList.toggle("drawer-open", open);
+  const button = $("#menuBtn");
+  if (button) button.setAttribute("aria-expanded", open ? "true" : "false");
+}
+
 function openModal(id) {
   $(`#${id}`).classList.remove("hidden");
 }
@@ -86,13 +96,14 @@ function openAuthModal(mode = null) {
   $("#authToggleBtn").textContent = isRegister ? "Already registered? Sign in" : "New here? Register";
   $("#authPassLabel").textContent = "Password" + (isRegister ? " (8+ characters)" : "");
   $("#authPass").setAttribute("autocomplete", isRegister ? "new-password" : "current-password");
-  $("#authCodeField").classList.toggle("hidden", !isRegister);
+  $("#authCodeField").classList.toggle("hidden", !isRegister || registrationOpen);
   $("#authError").textContent = "";
   if (!modal.contains(document.activeElement)) {
     $("#authUser").value = "";
     $("#authPass").value = "";
     $("#authCode").value = "";
   }
+  document.body.classList.add("auth-gate");
   modal.classList.remove("hidden");
   setTimeout(() => $("#authUser").focus(), 30);
 }
@@ -118,6 +129,7 @@ async function authSubmit() {
     state.user = payload.username;
     state.model = payload.model;
     $("#authModal").classList.add("hidden");
+    document.body.classList.remove("auth-gate");
     renderPill();
     await refresh();
   } catch (error) {
@@ -138,11 +150,13 @@ async function logoutUser() {
   state.note = null;
   state.quiz = null;
   state.results = null;
+  state.tutor = null;
   state.notes = [];
   renderNotes();
   renderEmpty();
   renderPill();
   sessionStorage.clear();
+  setDrawer(false);
   openAuthModal("login");
 }
 
@@ -295,13 +309,16 @@ function renderNoteView() {
       </div>
       <div class="actions">
         <button class="btn primary" id="genOpenBtn">Generate quiz</button>
+        <button class="btn ghost" id="tutorOpenBtn">Tutor mode</button>
         <button class="btn ghost" id="editNoteBtn">Edit</button>
         <button class="btn danger" id="deleteNoteBtn">Delete</button>
       </div>
     </div>
+    ${renderFiles(note.files)}
     ${quizzesSection}
     <div class="note-content">${esc(note.content)}</div>`;
   $("#genOpenBtn").addEventListener("click", openGenerator);
+  $("#tutorOpenBtn").addEventListener("click", () => openTutor(note));
   $("#editNoteBtn").addEventListener("click", () => openNoteModal(note));
   $("#deleteNoteBtn").addEventListener("click", deleteCurrentNote);
   $$(".take-quiz-btn").forEach((button) => {
@@ -310,6 +327,20 @@ function renderNoteView() {
   $$(".delete-quiz-btn").forEach((button) => {
     button.addEventListener("click", () => deleteQuiz(Number(button.dataset.id)));
   });
+  $$(".delete-file-btn").forEach((button) => {
+    button.addEventListener("click", () => deleteStoredFile(Number(button.dataset.id)));
+  });
+}
+
+async function deleteStoredFile(fileId) {
+  if (!confirm("Delete this file from Cloud storage?")) return;
+  try {
+    await api(`/api/files/${fileId}`, { method: "DELETE" });
+    if (state.note) await openNote(state.note.id);
+    toast("File deleted.");
+  } catch (error) {
+    toast(error.message, "error");
+  }
 }
 
 async function deleteQuiz(quizId) {
@@ -325,6 +356,36 @@ async function deleteQuiz(quizId) {
   } catch (error) {
     toast(error.message, "error");
   }
+}
+
+function renderFiles(files) {
+  if (!Array.isArray(files) || !files.length) return "";
+  return `
+    <section class="saved-quizzes">
+      <div class="section-head"><h3>Files</h3></div>
+      <div class="quiz-list">
+        ${files
+          .map(
+            (file) => `
+          <div class="quiz-row">
+            <div class="quiz-row-main">
+              <div class="quiz-row-title">${esc(file.filename)}</div>
+              <div class="quiz-row-meta">${escapeMime(file.mime)} · ${(file.size / 1024).toFixed(1)} KB · ${esc(formatDate(file.created_at))}</div>
+            </div>
+            <div class="quiz-row-actions">
+              <a class="btn small ghost file-open-link" href="/api/files/${file.id}/download?token=${encodeURIComponent(localStorage.getItem(TOKEN_KEY) || "")}" target="_blank" rel="noopener">Open</a>
+              <button class="btn small ghost delete-file-btn" data-id="${file.id}">Delete</button>
+            </div>
+          </div>`
+          )
+          .join("")}
+      </div>
+    </section>`;
+}
+
+function escapeMime(mime) {
+  const short = { "application/pdf": "PDF", "application/vnd.openxmlformats-officedocument.presentationml.presentation": "PPTX", "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "DOCX", "text/markdown": "MD", "text/csv": "CSV", "text/plain": "TXT" }[mime];
+  return esc(short || mime || "file");
 }
 
 function typeBadge(type) {
@@ -581,10 +642,13 @@ async function openNote(noteId) {
 }
 
 function openNoteModal(note = null) {
+  setDrawer(false);
   state.editingId = note ? note.id : null;
   $("#noteModalTitle").textContent = note ? "Edit note" : "New note";
   $("#noteTitle").value = note ? note.title : "";
   $("#noteContent").value = note ? note.content : "";
+  if (!note) pendingFileIds = [];
+  renderPendingFiles();
   openModal("noteModal");
   setTimeout(() => (note ? $("#noteContent") : $("#noteTitle")).focus(), 30);
 }
@@ -600,6 +664,7 @@ async function saveNote() {
   busy(button, "Saving");
   try {
     const payload = { title, content };
+    if (pendingFileIds.length) payload.file_ids = pendingFileIds.slice();
     const note = state.editingId
       ? await api(`/api/notes/${state.editingId}`, { method: "PUT", body: payload })
       : await api("/api/notes", { method: "POST", body: payload });
@@ -608,6 +673,8 @@ async function saveNote() {
     state.note = note;
     renderNotes();
     renderNoteView();
+    pendingFileIds = [];
+    renderPendingFiles();
     toast(state.editingId ? "Note updated." : "Note saved.");
     $(".main").scrollTop = 0;
   } catch (error) {
@@ -625,6 +692,7 @@ async function deleteCurrentNote() {
     state.note = null;
     state.quiz = null;
     state.results = null;
+    state.tutor = null;
     await loadNotes();
     renderNotes();
     renderEmpty();
@@ -672,6 +740,105 @@ async function generateQuiz() {
     if (/api key/i.test(error.message)) toast("Ask the administrator to configure the server API key.", "error");
   } finally {
     idle(button, "Generate quiz");
+  }
+}
+
+const TUTOR_LIMIT = 12;
+
+function openTutor(note) {
+  state.tutor = { noteId: note.id, messages: loadTutorMessages(note.id) };
+  renderTutor();
+  $(".main").scrollTop = 0;
+}
+
+function loadTutorMessages(noteId) {
+  try {
+    const parsed = JSON.parse(sessionStorage.getItem(`sb_tutor_${noteId}`) || "[]");
+    if (Array.isArray(parsed)) {
+      return parsed.filter((m) => m && typeof m.content === "string").slice(-TUTOR_LIMIT);
+    }
+  } catch (error) {
+    /* ignore bad cache */
+  }
+  return [];
+}
+
+function saveTutorMessages() {
+  if (state.tutor) {
+    sessionStorage.setItem(`sb_tutor_${state.tutor.noteId}`, JSON.stringify(state.tutor.messages.slice(-TUTOR_LIMIT)));
+  }
+}
+
+function renderTutor() {
+  const t = state.tutor;
+  if (!t) {
+    renderEmpty();
+    return;
+  }
+  const noteTitle = state.note && state.note.id === t.noteId ? state.note.title : "";
+  const chatHtml = t.messages.length
+    ? `<div class="chat-scroll" id="chatScroll">${t.messages
+        .map((m) => `<div class="msg ${m.role}"><div class="msg-body">${esc(m.content)}</div></div>`)
+        .join("")}</div>`
+    : `<div class="chat-empty">Ask anything about this note. The tutor answers only from what is written here.</div>`;
+  $("#view").innerHTML = `
+    <div class="view-head">
+      <div>
+        <h2>Tutor mode</h2>
+        <div class="meta">${noteTitle ? `for ${esc(noteTitle)} · ` : ""}answers come from your note</div>
+      </div>
+      <div class="actions">
+        <button class="btn ghost" id="tutorClearBtn">Clear chat</button>
+        <button class="btn ghost" id="tutorBackBtn">Back to note</button>
+      </div>
+    </div>
+    <div class="chat">
+      ${chatHtml}
+      <div class="chat-input row">
+        <input id="tutorInput" type="text" placeholder="Ask anything about this note..." autocomplete="off">
+        <button class="btn primary" id="tutorSendBtn">Send</button>
+      </div>
+    </div>`;
+  $("#tutorClearBtn").addEventListener("click", () => {
+    sessionStorage.removeItem(`sb_tutor_${t.noteId}`);
+    t.messages = [];
+    renderTutor();
+  });
+  $("#tutorBackBtn").addEventListener("click", () => {
+    if (state.note && state.note.id === t.noteId) renderNoteView();
+    else renderEmpty();
+  });
+  $("#tutorSendBtn").addEventListener("click", sendTutorMessage);
+  $("#tutorInput").addEventListener("keydown", (event) => {
+    if (event.key === "Enter") sendTutorMessage();
+  });
+  const scroll = $("#chatScroll");
+  if (scroll) scroll.scrollTop = scroll.scrollHeight;
+  setTimeout(() => $("#tutorInput").focus(), 30);
+}
+
+async function sendTutorMessage() {
+  const t = state.tutor;
+  const input = $("#tutorInput");
+  const message = input.value.trim();
+  if (!state.tutor || !message) return;
+  t.messages.push({ role: "user", content: message });
+  input.value = "";
+  renderTutor();
+  const button = $("#tutorSendBtn");
+  busy(button, "Thinking");
+  try {
+    const payload = await api(`/api/notes/${t.noteId}/tutor`, {
+      method: "POST",
+      body: { message, history: t.messages.slice(0, -1).slice(-TUTOR_LIMIT) },
+    });
+    t.messages.push({ role: "assistant", content: payload.reply || "" });
+    saveTutorMessages();
+  } catch (error) {
+    toast(error.message, "error");
+  } finally {
+    renderTutor();
+    idle($("#tutorSendBtn"), "Send");
   }
 }
 
@@ -745,27 +912,56 @@ function fileToBase64(file) {
   });
 }
 
-async function importFile(file) {
-  if (!file) return;
-  if (!/\.(txt|md|markdown|csv|json|log|docx|pdf)$/i.test(file.name)) {
-    toast("Unsupported file type. Use .txt, .md, .docx, or .pdf.", "error");
-    return;
-  }
-  try {
-    const data = await fileToBase64(file);
-    const result = await api("/api/extract", { method: "POST", body: { filename: file.name, data } });
-    const textarea = $("#noteContent");
-    textarea.value = textarea.value.trim() ? `${textarea.value.trimEnd()}\n\n${result.text}` : result.text;
-    if (!$("#noteTitle").value.trim()) {
-      $("#noteTitle").value = file.name.replace(/\.[^.]+$/, "");
+async function importFiles(files) {
+  const list = [...files].filter(Boolean);
+  if (!list.length) return;
+  let imported = 0;
+  const textarea = $("#noteContent");
+  for (const file of list) {
+    if (!/\.(txt|md|markdown|csv|json|log|docx|pdf|pptx)$/i.test(file.name)) {
+      toast(`Skipped ${file.name}: unsupported type (use .txt, .md, .csv, .docx, .pdf, or .pptx).`, "error");
+      continue;
     }
-    toast(result.truncated ? "Imported (cut to 60k characters)." : `Imported ${file.name}.`);
-  } catch (error) {
-    toast(error.message, "error");
+    try {
+      const data = await fileToBase64(file);
+      const result = await api("/api/files", { method: "POST", body: { filename: file.name, data } });
+      if (Number.isInteger(result.id) && result.id > 0) {
+        pendingFileIds.push(result.id);
+      }
+      if (result.text) {
+        const separator = textarea.value.trim() ? "\n\n" : "";
+        const header = list.length > 1 ? `--- ${file.name} ---\n\n` : "";
+        textarea.value = `${textarea.value.trimEnd()}${separator}${header}${result.text}`;
+      } else {
+        toast(`Stored ${file.name}, but it has no extractable text.`, "error");
+      }
+      if (!$("#noteTitle").value.trim()) {
+        $("#noteTitle").value = file.name.replace(/\.[^.]+$/, "");
+      }
+      imported++;
+    } catch (error) {
+      toast(`${file.name}: ${error.message}`, "error");
+    }
+  }
+  renderPendingFiles();
+  if (imported > 0) {
+    toast(`Attached ${imported} file${imported === 1 ? "" : "s"}. Remember to save the note.`);
   }
 }
 
+function renderPendingFiles() {
+  const holder = $("#pendingFiles");
+  if (!holder) return;
+  holder.innerHTML = pendingFileIds.length
+    ? `<span class="chip">${pendingFileIds.length} new file${pendingFileIds.length === 1 ? "" : "s"} will attach on save</span>`
+    : "";
+}
+
 function bind() {
+  $("#menuBtn").addEventListener("click", () => setDrawer(!document.body.classList.contains("drawer-open")));
+  $("#sidebarBackdrop").addEventListener("click", () => setDrawer(false));
+  $("#newNoteTopBtn").addEventListener("click", () => openNoteModal());
+  $("#noteList").addEventListener("click", () => setDrawer(false));
   $("#newNoteBtn").addEventListener("click", () => openNoteModal());
   $("#saveNoteBtn").addEventListener("click", saveNote);
   $("#genBtn").addEventListener("click", generateQuiz);
@@ -780,9 +976,9 @@ function bind() {
   }
   $("#importBtn").addEventListener("click", () => $("#fileInput").click());
   $("#fileInput").addEventListener("change", (event) => {
-    const file = event.target.files[0];
+    const files = [...event.target.files];
     event.target.value = "";
-    importFile(file);
+    importFiles(files);
   });
   $("#searchInput").addEventListener("input", (event) => {
     state.filter = event.target.value;
@@ -805,20 +1001,23 @@ function bind() {
     });
   });
   dropZone.addEventListener("drop", (event) => {
-    const file = event.dataTransfer.files[0];
-    if (file) importFile(file);
+    const files = [...event.dataTransfer.files];
+    if (files.length) importFiles(files);
   });
   $$("[data-close]").forEach((button) => {
     button.addEventListener("click", () => closeModal(button.dataset.close));
   });
   $$(".modal").forEach((modal) => {
     modal.addEventListener("mousedown", (event) => {
-      if (event.target === modal) modal.classList.add("hidden");
+      if (event.target === modal && modal.id !== "authModal") modal.classList.add("hidden");
     });
   });
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape") {
-      $$(".modal").forEach((modal) => modal.classList.add("hidden"));
+      setDrawer(false);
+      $$(".modal").forEach((modal) => {
+        if (modal.id !== "authModal") modal.classList.add("hidden");
+      });
     }
   });
 }
@@ -832,7 +1031,22 @@ async function refresh() {
 
 async function init() {
   bind();
-  await refresh();
+  try {
+    const health = await (await fetch("/api/health")).json();
+    registrationOpen = Boolean(health.registration_open);
+  } catch (error) {
+    registrationOpen = false;
+  }
+  if (!localStorage.getItem(TOKEN_KEY)) {
+    openAuthModal("login");
+    return;
+  }
+  try {
+    await refresh();
+  } catch (error) {
+    if (!localStorage.getItem(TOKEN_KEY)) return;
+    toast(error.message, "error");
+  }
 }
 
 document.addEventListener("DOMContentLoaded", init);

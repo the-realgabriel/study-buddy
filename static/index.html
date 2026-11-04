@@ -2,13 +2,22 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#fafaf9">
   <title>Study Buddy</title>
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
   <div class="app">
+    <header class="topbar">
+      <button id="menuBtn" class="icon-btn menu-btn" aria-label="Open notes menu" aria-expanded="false">&#9776;</button>
+      <div class="topbar-brand">
+        <div class="logo small">SB</div>
+        <span>Study Buddy</span>
+      </div>
+      <button id="newNoteTopBtn" class="btn small primary">New note</button>
+    </header>
     <aside class="sidebar">
       <div class="brand">
         <div class="logo">SB</div>
@@ -31,6 +40,8 @@
     </main>
   </div>
 
+  <div id="sidebarBackdrop" class="backdrop"></div>
+
   <div id="noteModal" class="modal hidden" role="dialog" aria-modal="true">
     <div class="sheet">
       <div class="sheet-head">
@@ -46,10 +57,11 @@
         <div id="dropZone" class="drop-zone">
           <textarea id="noteContent" placeholder="Paste your notes here, or drop a file below."></textarea>
           <div class="drop-actions">
-            <button id="importBtn" type="button" class="btn small">Import file</button>
-            <span class="hint">.txt, .md, .docx, .pdf</span>
-            <input id="fileInput" type="file" accept=".txt,.md,.markdown,.csv,.docx,.pdf" hidden>
+            <button id="importBtn" type="button" class="btn small">Import files</button>
+            <span class="hint">.txt, .md, .csv, .docx, .pdf, .pptx — multiple at once</span>
+            <input id="fileInput" type="file" accept=".txt,.md,.markdown,.csv,.docx,.pdf,.pptx" multiple hidden>
           </div>
+          <div id="pendingFiles" class="chips"></div>
         </div>
       </div>
       <div class="sheet-foot">
@@ -101,11 +113,10 @@
     </div>
   </div>
 
-  <div id="authModal" class="modal hidden" role="dialog" aria-modal="true">
+  <div id="authModal" class="modal auth-gate hidden" role="dialog" aria-modal="true">
     <div class="sheet">
       <div class="sheet-head">
         <h2 id="authTitle">Sign in</h2>
-        <button class="icon-btn" data-close="authModal" aria-label="Close">×</button>
       </div>
       <label class="field">
         <span>Username</span>
@@ -123,24 +134,6 @@
       <div class="sheet-foot">
         <button id="authToggleBtn" class="btn ghost">New here? Register</button>
         <button id="authSubmitBtn" class="btn primary">Sign in</button>
-      </div>
-    </div>
-  </div>
-
-  <div id="authModal" class="modal hidden" role="dialog" aria-modal="true">
-    <div class="sheet">
-      <div class="sheet-head">
-        <h2>Sign in</h2>
-        <button class="icon-btn" data-close="authModal" aria-label="Close">×</button>
-      </div>
-      <p class="hint" style="margin-bottom:12px">This deployment is locked. Enter the access password to continue.</p>
-      <label class="field">
-        <span>Password</span>
-        <input id="authPass" type="password" autocomplete="off">
-      </label>
-      <div class="sheet-foot">
-        <button class="btn ghost" data-close="authModal">Cancel</button>
-        <button id="authUnlockBtn" class="btn primary">Unlock</button>
       </div>
     </div>
   </div>

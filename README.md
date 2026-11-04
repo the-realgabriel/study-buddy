@@ -4,8 +4,10 @@ A local study app: add notes, generate a quiz from them, take the quiz, and get 
 
 ## Features
 
-- Notes: paste text or import `.txt`, `.md`, `.docx`, `.pdf`
+- Notes: paste text or import `.txt`, `.md`, `.csv`, `.docx`, `.pdf`, `.pptx` (multiple at once)
+- Uploaded files are stored in Cloudflare R2 (`study-buddy-files`) and can be opened later from the note
 - Quiz generation from the selected note only, with multiple choice, true/false, and short answer questions
+- Tutor mode: chat with a tutor that answers only from the selected note's content
 - Adjustable question count (5-20) and difficulty
 - Interactive test mode with progress tracking
 - Automatic grading, per-question explanations, and feedback on short answers
@@ -56,25 +58,52 @@ Then set the model name to whatever the server exposes (use Load models).
 
 ## Deploy to Cloudflare with your own MySQL (optional)
 
-The deployed version is multi-user (register + login), backed by MySQL via Cloudflare Hyperdrive. The LLM API key and model live server-side as Worker settings; users never see or change them.
+The deployed version is multi-user (register + login), backed by MySQL/MariaDB on your own server. Uploaded files land in Cloudflare R2. The Worker reaches the database through a small PHP bridge served over HTTPS, so MySQL never has to be exposed to the internet. The LLM API key and model live server-side as Worker settings; users never see or change them.
+
+How it works:
+
+```
+Browser -> Cloudflare Worker (study-buddy.theopgabrie.workers.dev)
+                 |            \
+                 |             +--> R2 "study-buddy-files" (uploaded PDFs/PPTX/DOCX)
+                 |  HTTPS POST + X-Bridge-Secret
+                 v
+        Caddy -> Apache/PHP bridge -> MariaDB (127.0.0.1)
+```
+
+### 1. Server side (once)
+
+```bash
+sudo mariadb < mysql/schema.sql          # creates the database + tables
+```
+
+Copy `server/bridge.php` to the web root (e.g. `/opt/lampp/htdocs/studybuddy-db/index.php`), replace the placeholders with the DB user/password and a long random secret, then route it through your reverse proxy. Example Caddy snippet:
+
+```caddy
+dev.theogking.site {
+    handle /studybuddy-db* {
+        reverse_proxy 127.0.0.1:8088
+    }
+    handle {
+        reverse_proxy 127.0.0.1:2000
+    }
+}
+```
+
+Keep MariaDB bound to `127.0.0.1` and give the bridge DB user rights on the `studybuddy` database only.
+
+### 2. Worker side
 
 ```bash
 npm install
-npx wrangler hyperdrive create study-buddy-db \
-  --connection-string="mysql://USER:PASSWORD@dev.theogking.site:3306/studybuddy?sslMode=REQUIRED"
-# put the printed ID into wrangler.jsonc -> hyperdrive[0].id
+npx wrangler secret put BRIDGE_SECRET   # same value as in bridge.php
+npx wrangler secret put LLM_API_KEY     # the OpenRouter (or Groq) key
 npx wrangler deploy
-npx wrangler secret put LLM_API_KEY        # the OpenRouter (or Groq) key
-npx wrangler secret put REGISTRATION_CODE  # optional invite code; unset = open registration
 ```
 
-Server-side (MariaDB) config:
+`wrangler.jsonc` sets `BRIDGE_URL` to the bridge endpoint and the R2 binding `FILES` -> bucket `study-buddy-files`. `REGISTRATION_CODE` is optional: set it with `npx wrangler secret put REGISTRATION_CODE` to require an invite code, or leave it unset for open registration.
 
-```bash
-sudo mariadb < mysql/schema.sql        # creates database + tables
-```
-
-Requires MariaDB reachable on a public IP/domain (firewall open for 3306) with TLS enabled; Hyperdrive allows only `sslMode=REQUIRED`. Local Python usage is unchanged and still independent.
+Local Python usage is unchanged and still independent of the deployed app.
 
 ## Data
 

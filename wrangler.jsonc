@@ -9,10 +9,11 @@
     "binding": "ASSETS",
     "not_found_handling": "single-page-application"
   },
-  "hyperdrive": [
-    { "binding": "HYPERDRIVE", "id": "PENDING_HYPERDRIVE_ID" }
+  "r2_buckets": [
+    { "binding": "FILES", "bucket_name": "study-buddy-files" }
   ],
   "vars": {
+    "BRIDGE_URL": "https://dev.theogking.site/studybuddy-db/",
     "LLM_BASE_URL": "https://openrouter.ai/api/v1",
     "LLM_MODEL": "nvidia/nemotron-3.5-super-vl:free"
   },

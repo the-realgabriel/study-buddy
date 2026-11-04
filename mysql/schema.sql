@@ -54,3 +54,16 @@ CREATE TABLE IF NOT EXISTS attempts (
   KEY idx_attempts_quiz (quiz_id),
   KEY idx_attempts_user (user_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS files (
+  id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  user_id INT UNSIGNED NOT NULL,
+  note_id INT UNSIGNED NULL,
+  filename VARCHAR(255) NOT NULL,
+  mime VARCHAR(128) NOT NULL,
+  size INT UNSIGNED NOT NULL,
+  r2_key VARCHAR(255) NOT NULL,
+  created_at VARCHAR(32) NOT NULL,
+  KEY idx_files_user (user_id),
+  KEY idx_files_note (note_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

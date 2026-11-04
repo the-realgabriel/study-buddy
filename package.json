@@ -9,7 +9,6 @@
   },
   "dependencies": {
     "fflate": "^0.8.2",
-    "mysql2": "^3.24.6",
     "unpdf": "^1.2.2"
   },
   "devDependencies": {
