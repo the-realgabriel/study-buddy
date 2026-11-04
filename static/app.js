@@ -316,7 +316,7 @@ function renderNoteView() {
     </div>
     ${renderFiles(note.files)}
     ${quizzesSection}
-    <div class="note-content">${esc(note.content)}</div>`;
+    ${note.content ? `<div class="note-content">${esc(note.content)}</div>` : ""}`;
   $("#genOpenBtn").addEventListener("click", openGenerator);
   $("#tutorOpenBtn").addEventListener("click", () => openTutor(note));
   $("#editNoteBtn").addEventListener("click", () => openNoteModal(note));
@@ -360,26 +360,32 @@ async function deleteQuiz(quizId) {
 
 function renderFiles(files) {
   if (!Array.isArray(files) || !files.length) return "";
+  const token = encodeURIComponent(localStorage.getItem(TOKEN_KEY) || "");
   return `
     <section class="saved-quizzes">
       <div class="section-head"><h3>Files</h3></div>
-      <div class="quiz-list">
-        ${files
-          .map(
-            (file) => `
-          <div class="quiz-row">
-            <div class="quiz-row-main">
-              <div class="quiz-row-title">${esc(file.filename)}</div>
-              <div class="quiz-row-meta">${escapeMime(file.mime)} · ${(file.size / 1024).toFixed(1)} KB · ${esc(formatDate(file.created_at))}</div>
+      ${files
+        .map((file) => {
+          const previewable = file.mime === "application/pdf";
+          const src = `/api/files/${file.id}/download?token=${token}`;
+          return `
+          <div class="file-block">
+            <div class="quiz-row">
+              <div class="quiz-row-main">
+                <div class="quiz-row-title">${esc(file.filename)}</div>
+                <div class="quiz-row-meta">${escapeMime(file.mime)} · ${(file.size / 1024).toFixed(1)} KB · ${esc(formatDate(file.created_at))}${previewable ? "" : " · open to view"}</div>
+              </div>
+              <div class="quiz-row-actions">
+                <a class="btn small ghost file-open-link" href="${src}" target="_blank" rel="noopener">Open</a>
+                <button class="btn small ghost delete-file-btn" data-id="${file.id}">Delete</button>
+              </div>
             </div>
-            <div class="quiz-row-actions">
-              <a class="btn small ghost file-open-link" href="/api/files/${file.id}/download?token=${encodeURIComponent(localStorage.getItem(TOKEN_KEY) || "")}" target="_blank" rel="noopener">Open</a>
-              <button class="btn small ghost delete-file-btn" data-id="${file.id}">Delete</button>
-            </div>
-          </div>`
-          )
-          .join("")}
-      </div>
+            ${previewable
+              ? `<details class="file-embed"><summary>Preview</summary><iframe loading="lazy" title="${esc(file.filename)}" src="${src}"></iframe></details>`
+              : ""}
+          </div>`;
+        })
+        .join("")}
     </section>`;
 }
 
@@ -656,8 +662,10 @@ function openNoteModal(note = null) {
 async function saveNote() {
   const title = $("#noteTitle").value.trim();
   const content = $("#noteContent").value.trim();
-  if (!content) {
-    toast("Add some note content first.", "error");
+  const hasFiles = pendingFileIds.length > 0
+    || (state.editingId && state.note && state.note.id === state.editingId && (state.note.files || []).length > 0);
+  if (!content && !hasFiles) {
+    toast("Add note content or attach a file first.", "error");
     return;
   }
   const button = $("#saveNoteBtn");
@@ -916,7 +924,7 @@ async function importFiles(files) {
   const list = [...files].filter(Boolean);
   if (!list.length) return;
   let imported = 0;
-  const textarea = $("#noteContent");
+  const sourceInfo = [];
   for (const file of list) {
     if (!/\.(txt|md|markdown|csv|json|log|docx|pdf|pptx)$/i.test(file.name)) {
       toast(`Skipped ${file.name}: unsupported type (use .txt, .md, .csv, .docx, .pdf, or .pptx).`, "error");
@@ -929,9 +937,7 @@ async function importFiles(files) {
         pendingFileIds.push(result.id);
       }
       if (result.text) {
-        const separator = textarea.value.trim() ? "\n\n" : "";
-        const header = list.length > 1 ? `--- ${file.name} ---\n\n` : "";
-        textarea.value = `${textarea.value.trimEnd()}${separator}${header}${result.text}`;
+        sourceInfo.push(`${file.name}: extracted`);
       } else {
         toast(`Stored ${file.name}, but it has no extractable text.`, "error");
       }
@@ -946,6 +952,10 @@ async function importFiles(files) {
   renderPendingFiles();
   if (imported > 0) {
     toast(`Attached ${imported} file${imported === 1 ? "" : "s"}. Remember to save the note.`);
+    if (sourceInfo.length) {
+      const el = $("#pendingFiles");
+      if (el) el.title = `Text will be readable to the tutor and quiz generator.`;
+    }
   }
 }
 

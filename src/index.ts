@@ -701,6 +701,16 @@ function rowToFile(row: any, includeMeta = false): Dict {
   return file;
 }
 
+async function deriveTitleFromFiles(conn: Conn, userId: number, fileIds: unknown[]): Promise<string> {
+  const first = (Array.isArray(fileIds) ? fileIds : [])
+    .map((id) => Number.parseInt(String(id), 10))
+    .filter((id) => Number.isInteger(id) && id > 0)[0];
+  if (!first) return "Untitled note";
+  const rows = await qRows(conn, "SELECT filename FROM files WHERE id = ? AND user_id = ?", [first, userId]);
+  if (!rows.length) return "Untitled note";
+  return deriveTitle(String(rows[0].filename).replace(/\.[^.]+$/, ""), "Untitled note");
+}
+
 async function attachFiles(conn: Conn, env: Env, userId: number, fileIds: unknown[], noteId: number): Promise<void> {
   const ids = [...new Set(
     (Array.isArray(fileIds) ? fileIds : [])
@@ -804,6 +814,23 @@ async function getNote(conn: Conn, userId: number, noteId: number, includeQuizze
   const note = rowToNote(rows[0]);
   if (includeQuizzes) note.quizzes = await listQuizzesForNote(conn, userId, noteId);
   note.files = await listFilesForNote(conn, userId, noteId);
+  return note;
+}
+
+async function noteSource(conn: Conn, userId: number, noteId: number): Promise<Dict> {
+  const rows = await qRows(conn, "SELECT * FROM notes WHERE id = ? AND user_id = ?", [noteId, userId]);
+  if (!rows.length) throw new ApiError(404, "Note not found.");
+  const note = rowToNote(rows[0]);
+  const fileRows = await qRows(
+    conn,
+    "SELECT filename, text FROM files WHERE user_id = ? AND note_id = ? ORDER BY id",
+    [userId, noteId]
+  );
+  const texts = [String(note.content || "")];
+  for (const file of fileRows) {
+    if (file.text) texts.push(String(file.text));
+  }
+  note.content = texts.filter(Boolean).join("\n\n").slice(0, MAX_NOTE_CHARS);
   return note;
 }
 
@@ -983,11 +1010,13 @@ async function route(conn: Conn, env: Env, method: string, path: string, data: D
 
   if (method === "POST" && path === "/api/notes") {
     const content = String(data.content || "").trim();
-    if (!content) throw new ApiError(400, "Note content is empty.");
+    const requestedFiles = Array.isArray(data.file_ids) ? data.file_ids : [];
+    if (!content && !requestedFiles.length) throw new ApiError(400, "Note content is empty.");
     if (content.length > MAX_NOTE_CHARS) {
       throw new ApiError(413, `Note is too long (limit ${MAX_NOTE_CHARS} characters).`);
     }
-    const title = String(data.title || "").trim().slice(0, 120) || deriveTitle(content);
+    let title = String(data.title || "").trim().slice(0, 120);
+    if (!title) title = content ? deriveTitle(content) : await deriveTitleFromFiles(conn, user.userId, requestedFiles);
     const stamp = now();
     const result = await qRun(
       conn,
@@ -1005,11 +1034,14 @@ async function route(conn: Conn, env: Env, method: string, path: string, data: D
     if (method === "PUT") {
       const note = await getNote(conn, user.userId, noteId, false);
       const content = String(data.content ?? note.content).trim();
-      if (!content) throw new ApiError(400, "Note content is empty.");
+      if (!content && !note.files.length) {
+        throw new ApiError(400, "Add note content or attach a file first.");
+      }
       if (content.length > MAX_NOTE_CHARS) {
         throw new ApiError(413, `Note is too long (limit ${MAX_NOTE_CHARS} characters).`);
       }
-      const title = String(data.title ?? note.title).trim().slice(0, 120) || deriveTitle(content);
+      let title = String(data.title ?? note.title).trim().slice(0, 120);
+      if (!title) title = content ? deriveTitle(content) : "Untitled note";
       await qRun(
         conn,
         "UPDATE notes SET title = ?, content = ?, updated_at = ? WHERE id = ? AND user_id = ?",
@@ -1035,7 +1067,7 @@ async function route(conn: Conn, env: Env, method: string, path: string, data: D
 
   match = path.match(/^\/api\/notes\/(\d+)\/generate$/);
   if (method === "POST" && match) {
-    const note = await getNote(conn, user.userId, Number(match[1]));
+    const note = await noteSource(conn, user.userId, Number(match[1]));
     const count = Math.max(1, Math.min(Number.parseInt(String(data.count || 8), 10) || 8, 20));
     let difficulty = String(data.difficulty || "medium").toLowerCase();
     if (!["easy", "medium", "hard"].includes(difficulty)) difficulty = "medium";
@@ -1163,22 +1195,22 @@ async function route(conn: Conn, env: Env, method: string, path: string, data: D
     } catch (err) {
       throw new ApiError(502, `Could not store the file: ${err}`);
     }
+    let text = "";
+    let truncated = false;
+    let extraction_error = "";
+    try {
+      text = await extractTextContent(filename, raw);
+      truncated = text.length > MAX_NOTE_CHARS;
+      text = text.slice(0, MAX_NOTE_CHARS);
+    } catch (err) {
+      extraction_error = err instanceof ApiError ? err.message : "Could not read that file.";
+    }
     try {
       const row = await qRun(
         conn,
-        "INSERT INTO files (user_id, note_id, filename, mime, size, r2_key, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-        [user.userId, noteId, filename, mime, raw.length, key, now()]
+        "INSERT INTO files (user_id, note_id, filename, mime, text, size, r2_key, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        [user.userId, noteId, filename, mime, text, raw.length, key, now()]
       );
-      let text = "";
-      let truncated = false;
-      let extraction_error = "";
-      try {
-        text = await extractTextContent(filename, raw);
-        truncated = text.length > MAX_NOTE_CHARS;
-        text = text.slice(0, MAX_NOTE_CHARS);
-      } catch (err) {
-        extraction_error = err instanceof ApiError ? err.message : `Could not read that file.`;
-      }
       return json({
         id: row.insertId,
         filename,
@@ -1220,7 +1252,7 @@ async function route(conn: Conn, env: Env, method: string, path: string, data: D
 
   match = path.match(/^\/api\/notes\/(\d+)\/tutor$/);
   if (method === "POST" && match) {
-    const note = await getNote(conn, user.userId, Number(match[1]), false);
+    const note = await noteSource(conn, user.userId, Number(match[1]));
     const rawHistory = Array.isArray(data.history) ? data.history : [];
     const history = rawHistory
       .filter((m: unknown) => m && typeof m === "object" && ["user", "assistant"].includes(String((m as Dict).role)))

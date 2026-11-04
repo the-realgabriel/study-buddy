@@ -785,6 +785,7 @@ textarea.short-answer:focus { border-color: var(--accent); box-shadow: 0 0 0 3px
 
 @media (max-width: 420px) {
   .view { padding-left: 13px; padding-right: 13px; }
+  .file-embed iframe { height: 56vh; }
   .quiz-row { flex-direction: column; align-items: stretch; gap: 9px; }
   .quiz-row-actions { justify-content: flex-end; }
   .results-head { flex-direction: column; align-items: flex-start; gap: 12px; }
@@ -837,4 +838,24 @@ a.btn { text-decoration: none; }
   bottom: 0;
   padding: 10px 0 calc(10px + env(safe-area-inset-bottom));
   background: linear-gradient(transparent, var(--bg) 30%);
+}
+
+.file-block { margin-bottom: 10px; }
+.file-embed { margin-top: 7px; }
+.file-embed summary {
+  cursor: pointer;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--accent-strong);
+  padding: 4px 2px;
+  user-select: none;
+}
+.file-embed summary:hover { color: var(--ink); }
+.file-embed[open] { padding-bottom: 8px; }
+.file-embed iframe {
+  width: 100%;
+  height: 640px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: #ffffff;
 }
