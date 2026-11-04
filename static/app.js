@@ -22,7 +22,9 @@ const state = {
   filter: "",
 };
 
-let pendingFileIds = [];
+let pendingFiles = [];
+let uploadingFiles = false;
+let tutorBusy = false;
 
 const TOKEN_KEY = "sb_auth_token";
 let authMode = "login";
@@ -83,8 +85,21 @@ function openModal(id) {
   $(`#${id}`).classList.remove("hidden");
 }
 
-function closeModal(id) {
+function discardPendingFiles() {
+  if (!pendingFiles.length) return;
+  const toDelete = pendingFiles.slice();
+  pendingFiles = [];
+  renderPendingFiles();
+  for (const f of toDelete) {
+    api(`/api/files/${f.id}`, { method: "DELETE" }).catch(() => {});
+  }
+}
+
+function closeModal(id, keepPending = false) {
   $(`#${id}`).classList.add("hidden");
+  if (id === "noteModal" && !keepPending) {
+    discardPendingFiles();
+  }
 }
 
 function openAuthModal(mode = null) {
@@ -230,13 +245,16 @@ function renderNotes() {
   }
   list.innerHTML = notes
     .map((note) => {
+      const filesLabel = note.file_count
+        ? `${note.file_count} file${note.file_count === 1 ? "" : "s"} · `
+        : "";
       const quizzes = note.quiz_count
         ? `${note.quiz_count} quiz${note.quiz_count === 1 ? "" : "zes"} · `
         : "";
       return `
       <button class="note-item ${state.note && state.note.id === note.id ? "active" : ""}" data-id="${note.id}">
         <span class="note-title">${esc(note.title)}</span>
-        <span class="note-meta">${quizzes}${note.length.toLocaleString()} chars · ${esc(formatDate(note.updated_at))}</span>
+        <span class="note-meta">${filesLabel}${quizzes}${note.length.toLocaleString()} chars · ${esc(formatDate(note.updated_at))}</span>
       </button>`;
     })
     .join("");
@@ -336,7 +354,9 @@ async function deleteStoredFile(fileId) {
   if (!confirm("Delete this file from Cloud storage?")) return;
   try {
     await api(`/api/files/${fileId}`, { method: "DELETE" });
+    await loadNotes();
     if (state.note) await openNote(state.note.id);
+    else renderNotes();
     toast("File deleted.");
   } catch (error) {
     toast(error.message, "error");
@@ -381,7 +401,7 @@ function renderFiles(files) {
               </div>
             </div>
             ${previewable
-              ? `<details class="file-embed"><summary>Preview</summary><iframe loading="lazy" title="${esc(file.filename)}" src="${src}"></iframe></details>`
+              ? `<details class="file-embed" open><summary>Preview</summary><iframe loading="lazy" title="${esc(file.filename)}" src="${src}"></iframe></details>`
               : ""}
           </div>`;
         })
@@ -649,20 +669,24 @@ async function openNote(noteId) {
 
 function openNoteModal(note = null) {
   setDrawer(false);
+  discardPendingFiles();
   state.editingId = note ? note.id : null;
   $("#noteModalTitle").textContent = note ? "Edit note" : "New note";
   $("#noteTitle").value = note ? note.title : "";
   $("#noteContent").value = note ? note.content : "";
-  if (!note) pendingFileIds = [];
   renderPendingFiles();
   openModal("noteModal");
   setTimeout(() => (note ? $("#noteContent") : $("#noteTitle")).focus(), 30);
 }
 
 async function saveNote() {
+  if (uploadingFiles) {
+    toast("Please wait for file uploads to finish.", "error");
+    return;
+  }
   const title = $("#noteTitle").value.trim();
   const content = $("#noteContent").value.trim();
-  const hasFiles = pendingFileIds.length > 0
+  const hasFiles = pendingFiles.length > 0
     || (state.editingId && state.note && state.note.id === state.editingId && (state.note.files || []).length > 0);
   if (!content && !hasFiles) {
     toast("Add note content or attach a file first.", "error");
@@ -672,17 +696,17 @@ async function saveNote() {
   busy(button, "Saving");
   try {
     const payload = { title, content };
-    if (pendingFileIds.length) payload.file_ids = pendingFileIds.slice();
+    if (pendingFiles.length) payload.file_ids = pendingFiles.map((f) => f.id);
     const note = state.editingId
       ? await api(`/api/notes/${state.editingId}`, { method: "PUT", body: payload })
       : await api("/api/notes", { method: "POST", body: payload });
-    closeModal("noteModal");
+    pendingFiles = [];
+    renderPendingFiles();
+    closeModal("noteModal", true);
     await loadNotes();
     state.note = note;
     renderNotes();
     renderNoteView();
-    pendingFileIds = [];
-    renderPendingFiles();
     toast(state.editingId ? "Note updated." : "Note saved.");
     $(".main").scrollTop = 0;
   } catch (error) {
@@ -826,15 +850,21 @@ function renderTutor() {
 }
 
 async function sendTutorMessage() {
+  if (tutorBusy) return;
   const t = state.tutor;
   const input = $("#tutorInput");
+  if (!t || !input) return;
   const message = input.value.trim();
-  if (!state.tutor || !message) return;
+  if (!message) return;
+  tutorBusy = true;
   t.messages.push({ role: "user", content: message });
   input.value = "";
   renderTutor();
+  const activeInput = $("#tutorInput");
   const button = $("#tutorSendBtn");
-  busy(button, "Thinking");
+  if (activeInput) activeInput.disabled = true;
+  if (button) busy(button, "Thinking");
+  let failed = false;
   try {
     const payload = await api(`/api/notes/${t.noteId}/tutor`, {
       method: "POST",
@@ -843,14 +873,23 @@ async function sendTutorMessage() {
     t.messages.push({ role: "assistant", content: payload.reply || "" });
     saveTutorMessages();
   } catch (error) {
+    failed = true;
+    t.messages.pop();
     toast(error.message, "error");
   } finally {
-    renderTutor();
-    idle($("#tutorSendBtn"), "Send");
+    tutorBusy = false;
+    if (state.tutor === t) {
+      renderTutor();
+      if (failed && $("#tutorInput")) {
+        $("#tutorInput").value = message;
+        $("#tutorInput").focus();
+      }
+    }
   }
 }
 
 async function showHistory() {
+  setDrawer(false);
   try {
     const { attempts } = await api("/api/attempts");
     if (!attempts.length) {
@@ -922,49 +961,69 @@ function fileToBase64(file) {
 
 async function importFiles(files) {
   const list = [...files].filter(Boolean);
-  if (!list.length) return;
+  if (!list.length || uploadingFiles) return;
+  uploadingFiles = true;
+  const importBtn = $("#importBtn");
+  const saveBtn = $("#saveNoteBtn");
+  if (importBtn) busy(importBtn, `Uploading (0/${list.length})`);
+  if (saveBtn) saveBtn.disabled = true;
   let imported = 0;
-  const sourceInfo = [];
-  for (const file of list) {
-    if (!/\.(txt|md|markdown|csv|json|log|docx|pdf|pptx)$/i.test(file.name)) {
-      toast(`Skipped ${file.name}: unsupported type (use .txt, .md, .csv, .docx, .pdf, or .pptx).`, "error");
-      continue;
-    }
-    try {
-      const data = await fileToBase64(file);
-      const result = await api("/api/files", { method: "POST", body: { filename: file.name, data } });
-      if (Number.isInteger(result.id) && result.id > 0) {
-        pendingFileIds.push(result.id);
+  try {
+    for (let i = 0; i < list.length; i++) {
+      const file = list[i];
+      if (importBtn) busy(importBtn, `Uploading (${i + 1}/${list.length})`);
+      if (!/\.(txt|md|markdown|csv|json|log|docx|pdf|pptx)$/i.test(file.name)) {
+        toast(`Skipped ${file.name}: unsupported type (use .txt, .md, .csv, .docx, .pdf, or .pptx).`, "error");
+        continue;
       }
-      if (result.text) {
-        sourceInfo.push(`${file.name}: extracted`);
-      } else {
-        toast(`Stored ${file.name}, but it has no extractable text.`, "error");
+      try {
+        const data = await fileToBase64(file);
+        const result = await api("/api/files", { method: "POST", body: { filename: file.name, data } });
+        if (Number.isInteger(result.id) && result.id > 0) {
+          pendingFiles.push({ id: result.id, filename: file.name });
+          renderPendingFiles();
+        }
+        if (!result.text) {
+          toast(`Stored ${file.name}, but it has no extractable text.`, "error");
+        }
+        if (!$("#noteTitle").value.trim()) {
+          $("#noteTitle").value = file.name.replace(/\.[^.]+$/, "");
+        }
+        imported++;
+      } catch (error) {
+        toast(`${file.name}: ${error.message}`, "error");
       }
-      if (!$("#noteTitle").value.trim()) {
-        $("#noteTitle").value = file.name.replace(/\.[^.]+$/, "");
-      }
-      imported++;
-    } catch (error) {
-      toast(`${file.name}: ${error.message}`, "error");
     }
-  }
-  renderPendingFiles();
-  if (imported > 0) {
-    toast(`Attached ${imported} file${imported === 1 ? "" : "s"}. Remember to save the note.`);
-    if (sourceInfo.length) {
-      const el = $("#pendingFiles");
-      if (el) el.title = `Text will be readable to the tutor and quiz generator.`;
+    if (imported > 0) {
+      toast(`Attached ${imported} file${imported === 1 ? "" : "s"}. Click Save note to finish.`);
     }
+  } finally {
+    uploadingFiles = false;
+    if (importBtn) idle(importBtn, "Import files");
+    if (saveBtn) saveBtn.disabled = false;
   }
 }
 
 function renderPendingFiles() {
   const holder = $("#pendingFiles");
   if (!holder) return;
-  holder.innerHTML = pendingFileIds.length
-    ? `<span class="chip">${pendingFileIds.length} new file${pendingFileIds.length === 1 ? "" : "s"} will attach on save</span>`
-    : "";
+  if (!pendingFiles.length) {
+    holder.innerHTML = "";
+    return;
+  }
+  holder.innerHTML = pendingFiles
+    .map(
+      (f) => `<span class="chip" title="Will attach when you save">${esc(f.filename)} <button type="button" class="chip-rm" data-id="${f.id}" aria-label="Remove">×</button></span>`
+    )
+    .join("");
+  $$(".chip-rm", holder).forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const id = Number(btn.dataset.id);
+      pendingFiles = pendingFiles.filter((f) => f.id !== id);
+      renderPendingFiles();
+      api(`/api/files/${id}`, { method: "DELETE" }).catch(() => {});
+    });
+  });
 }
 
 function bind() {
@@ -1019,14 +1078,14 @@ function bind() {
   });
   $$(".modal").forEach((modal) => {
     modal.addEventListener("mousedown", (event) => {
-      if (event.target === modal && modal.id !== "authModal") modal.classList.add("hidden");
+      if (event.target === modal && modal.id !== "authModal") closeModal(modal.id);
     });
   });
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape") {
       setDrawer(false);
       $$(".modal").forEach((modal) => {
-        if (modal.id !== "authModal") modal.classList.add("hidden");
+        if (modal.id !== "authModal" && !modal.classList.contains("hidden")) closeModal(modal.id);
       });
     }
   });

@@ -88,6 +88,27 @@ function randomToken(): string {
   return toHex(crypto.getRandomValues(new Uint8Array(32)));
 }
 
+function timingSafeEqualStr(a: string, b: string): boolean {
+  const enc = new TextEncoder();
+  const ab = enc.encode(a);
+  const bb = enc.encode(b);
+  if (ab.byteLength !== bb.byteLength) return false;
+  let diff = 0;
+  for (let i = 0; i < ab.byteLength; i++) diff |= ab[i] ^ bb[i];
+  return diff === 0;
+}
+
+function safeJsonParse<T>(raw: unknown, fallback: T): T {
+  try {
+    const parsed = JSON.parse(String(raw ?? ""));
+    return (parsed ?? fallback) as T;
+  } catch {
+    return fallback;
+  }
+}
+
+const ALLOWED_FILE_EXT = /\.(txt|md|markdown|csv|json|log|docx|pdf|pptx)$/i;
+
 interface BridgeResult {
   rows: any[];
   insertId: number;
@@ -735,12 +756,14 @@ async function deleteFile(env: Env, conn: Conn, userId: number, fileId: number):
 }
 
 function rowToNote(row: any, includeContent = true): Dict {
+  const extraLen = Number(row.file_text_length || 0);
   const note: Dict = {
     id: row.id,
     title: row.title,
     created_at: row.created_at,
     updated_at: row.updated_at,
-    length: String(row.content).length,
+    length: String(row.content || "").length + extraLen,
+    file_count: Number(row.file_count || 0),
   };
   if (includeContent) note.content = row.content;
   return note;
@@ -782,16 +805,16 @@ async function listQuizzesForNote(conn: Conn, userId: number, noteId: number): P
             MAX(a.score) AS best_score,
             MAX(a.total) AS best_total
      FROM quizzes q
-     LEFT JOIN attempts a ON a.quiz_id = q.id
+     LEFT JOIN attempts a ON a.quiz_id = q.id AND a.user_id = q.user_id
      WHERE q.note_id = ? AND q.user_id = ?
-     GROUP BY q.id, q.title, q.questions, q.created_at
+     GROUP BY q.id
      ORDER BY q.created_at DESC, q.id DESC`,
     [noteId, userId]
   );
   return rows.map((q: any) => ({
     id: q.id,
     title: q.title,
-    question_count: JSON.parse(String(q.questions)).length,
+    question_count: safeJsonParse< any[] >(q.questions, []).length,
     created_at: q.created_at,
     attempt_count: Number(q.attempt_count),
     best_score: q.best_score === null ? null : Number(q.best_score),
@@ -799,13 +822,15 @@ async function listQuizzesForNote(conn: Conn, userId: number, noteId: number): P
   }));
 }
 
-async function listFilesForNote(conn: Conn, userId: number, noteId: number): Promise<Dict[]> {
+async function listFilesForNote(conn: Conn, userId: number, noteId: number): Promise<{ files: Dict[]; textLength: number }> {
   const rows = await qRows(
     conn,
-    "SELECT * FROM files WHERE user_id = ? AND note_id = ? ORDER BY created_at DESC, id DESC LIMIT 200",
+    "SELECT id, user_id, note_id, filename, mime, size, created_at, CHAR_LENGTH(COALESCE(text, '')) AS text_len FROM files WHERE user_id = ? AND note_id = ? ORDER BY created_at DESC, id DESC LIMIT 200",
     [userId, noteId]
   );
-  return rows.map((row) => rowToFile(row));
+  let textLength = 0;
+  for (const row of rows) textLength += Number(row.text_len || 0);
+  return { files: rows.map((row) => rowToFile(row)), textLength };
 }
 
 async function getNote(conn: Conn, userId: number, noteId: number, includeQuizzes = true): Promise<Dict> {
@@ -813,7 +838,10 @@ async function getNote(conn: Conn, userId: number, noteId: number, includeQuizze
   if (!rows.length) throw new ApiError(404, "Note not found.");
   const note = rowToNote(rows[0]);
   if (includeQuizzes) note.quizzes = await listQuizzesForNote(conn, userId, noteId);
-  note.files = await listFilesForNote(conn, userId, noteId);
+  const { files, textLength } = await listFilesForNote(conn, userId, noteId);
+  note.files = files;
+  note.file_count = files.length;
+  note.length = String(note.content || "").length + textLength;
   return note;
 }
 
@@ -830,7 +858,10 @@ async function noteSource(conn: Conn, userId: number, noteId: number): Promise<D
   for (const file of fileRows) {
     if (file.text) texts.push(String(file.text));
   }
-  note.content = texts.filter(Boolean).join("\n\n").slice(0, MAX_NOTE_CHARS);
+  note.content = texts.map((t) => t.trim()).filter(Boolean).join("\n\n").slice(0, MAX_NOTE_CHARS);
+  if (!note.content) {
+    throw new ApiError(400, "This note has no readable text yet. Add some text or attach a file with selectable text.");
+  }
   return note;
 }
 
@@ -847,7 +878,7 @@ async function getQuiz(conn: Conn, userId: number, quizId: number): Promise<Dict
     note_id: row.note_id,
     note_title: row.note_title,
     title: row.title,
-    questions: JSON.parse(String(row.questions)),
+    questions: safeJsonParse< any[] >(row.questions, []),
     created_at: row.created_at,
   };
 }
@@ -895,6 +926,8 @@ async function downloadFile(env: Env, conn: Conn, request: Request, fileId: numb
       "Content-Type": file.mime,
       "Content-Disposition": `inline; filename="${filenameSafe}"`,
       "Cache-Control": "private, no-store",
+      "X-Content-Type-Options": "nosniff",
+      "Content-Security-Policy": "default-src 'none'; img-src 'self' data: blob:; media-src 'self' data: blob:; style-src 'unsafe-inline'; object-src 'self' blob:; frame-ancestors 'self'",
     },
   });
 }
@@ -905,8 +938,16 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
   const method = request.method;
 
   const origin = request.headers.get("Origin");
-  if (origin && new URL(origin).host !== url.host) {
-    return json({ error: "Cross-origin requests are not allowed." }, 403);
+  if (origin) {
+    let originHost = "";
+    try {
+      originHost = new URL(origin).host;
+    } catch {
+      originHost = "";
+    }
+    if (originHost !== url.host) {
+      return json({ error: "Cross-origin requests are not allowed." }, 403);
+    }
   }
 
   const data = method === "POST" || method === "PUT" ? await readJson(request) : {};
@@ -935,7 +976,7 @@ async function route(conn: Conn, env: Env, method: string, path: string, data: D
     if (password.length < 8 || password.length > 128) {
       throw new ApiError(400, "Password must be 8-128 characters.");
     }
-    if (env.REGISTRATION_CODE && String(data.code || "") !== env.REGISTRATION_CODE) {
+    if (env.REGISTRATION_CODE && !timingSafeEqualStr(String(data.code || ""), env.REGISTRATION_CODE)) {
       throw new ApiError(403, "Registration requires an invite code.");
     }
     const existing = await qRows(conn, "SELECT id FROM users WHERE username = ?", [username]);
@@ -966,7 +1007,7 @@ async function route(conn: Conn, env: Env, method: string, path: string, data: D
     const stored = String(rows[0].password_hash);
     const saltHex = stored.split(":")[0];
     const candidateHash = await hashPassword(password, saltHex);
-    if (candidateHash !== stored) throw new ApiError(401, "Wrong username or password.");
+    if (!timingSafeEqualStr(candidateHash, stored)) throw new ApiError(401, "Wrong username or password.");
     const token = await createSession(conn, rows[0].id);
     return json({ token, username, model: env.LLM_MODEL || DEFAULT_MODEL });
   }
@@ -996,11 +1037,12 @@ async function route(conn: Conn, env: Env, method: string, path: string, data: D
   if (method === "GET" && path === "/api/notes") {
     const rows = await qRows(
       conn,
-      `SELECT n.id, n.title, n.created_at, n.updated_at, n.content, COUNT(q.id) AS quiz_count
+      `SELECT n.id, n.title, n.created_at, n.updated_at, n.content,
+              (SELECT COUNT(*) FROM quizzes q WHERE q.note_id = n.id AND q.user_id = n.user_id) AS quiz_count,
+              (SELECT COUNT(*) FROM files f WHERE f.note_id = n.id AND f.user_id = n.user_id) AS file_count,
+              (SELECT COALESCE(SUM(CHAR_LENGTH(f.text)), 0) FROM files f WHERE f.note_id = n.id AND f.user_id = n.user_id) AS file_text_length
        FROM notes n
-       LEFT JOIN quizzes q ON q.note_id = n.id AND q.user_id = n.user_id
        WHERE n.user_id = ?
-       GROUP BY n.id, n.title, n.created_at, n.updated_at, n.content
        ORDER BY n.updated_at DESC`,
       [user.userId]
     );
@@ -1034,23 +1076,35 @@ async function route(conn: Conn, env: Env, method: string, path: string, data: D
     if (method === "PUT") {
       const note = await getNote(conn, user.userId, noteId, false);
       const content = String(data.content ?? note.content).trim();
-      if (!content && !note.files.length) {
+      const incomingFiles = Array.isArray(data.file_ids) ? data.file_ids : [];
+      if (!content && !note.files.length && !incomingFiles.length) {
         throw new ApiError(400, "Add note content or attach a file first.");
       }
       if (content.length > MAX_NOTE_CHARS) {
         throw new ApiError(413, `Note is too long (limit ${MAX_NOTE_CHARS} characters).`);
       }
       let title = String(data.title ?? note.title).trim().slice(0, 120);
-      if (!title) title = content ? deriveTitle(content) : "Untitled note";
+      if (!title) {
+        title = content
+          ? deriveTitle(content)
+          : incomingFiles.length
+            ? await deriveTitleFromFiles(conn, user.userId, incomingFiles)
+            : note.title || "Untitled note";
+      }
       await qRun(
         conn,
         "UPDATE notes SET title = ?, content = ?, updated_at = ? WHERE id = ? AND user_id = ?",
         [title, content, now(), noteId, user.userId]
       );
-      await attachFiles(conn, env, user.userId, data.file_ids, noteId);
+      await attachFiles(conn, env, user.userId, incomingFiles, noteId);
       return json(await getNote(conn, user.userId, noteId));
     }
     if (method === "DELETE") {
+      const fileRows = await qRows(
+        conn,
+        "SELECT r2_key FROM files WHERE note_id = ? AND user_id = ?",
+        [noteId, user.userId]
+      );
       await withTx(env, async (c) => {
         await qRun(
           c,
@@ -1058,9 +1112,14 @@ async function route(conn: Conn, env: Env, method: string, path: string, data: D
           [user.userId, noteId, user.userId]
         );
         await qRun(c, "DELETE FROM quizzes WHERE note_id = ? AND user_id = ?", [noteId, user.userId]);
-        await qRun(c, "UPDATE files SET note_id = NULL WHERE note_id = ? AND user_id = ?", [noteId, user.userId]);
+        await qRun(c, "DELETE FROM files WHERE note_id = ? AND user_id = ?", [noteId, user.userId]);
         await qRun(c, "DELETE FROM notes WHERE id = ? AND user_id = ?", [noteId, user.userId]);
       });
+      for (const f of fileRows) {
+        if (f.r2_key) {
+          try { await env.FILES.delete(String(f.r2_key)); } catch {}
+        }
+      }
       return json({ ok: true });
     }
   }
@@ -1161,7 +1220,7 @@ async function route(conn: Conn, env: Env, method: string, path: string, data: D
       note_title: row.note_title,
       score: row.score,
       total: row.total,
-      results: JSON.parse(String(row.results)),
+      results: safeJsonParse< any[] >(row.results, []),
       created_at: row.created_at,
     });
   }
@@ -1169,6 +1228,9 @@ async function route(conn: Conn, env: Env, method: string, path: string, data: D
   if (method === "POST" && path === "/api/files") {
     const encoded = String(data.data || "");
     const filename = String(data.filename || "file").trim().slice(0, 255) || "file";
+    if (!ALLOWED_FILE_EXT.test(filename)) {
+      throw new ApiError(415, "Unsupported file type. Use .txt, .md, .csv, .docx, .pdf, or .pptx.");
+    }
     if (!encoded) throw new ApiError(400, "No file data received.");
     let raw: Uint8Array;
     try {
@@ -1316,7 +1378,7 @@ export default {
           return json(body, err.status);
         }
         console.error("Unhandled error:", err);
-        return json({ error: `Unexpected server error: ${err}` }, 500);
+        return json({ error: "Unexpected server error. Please try again." }, 500);
       }
     }
     return env.ASSETS.fetch(request);

@@ -792,7 +792,8 @@ textarea.short-answer:focus { border-color: var(--accent); box-shadow: 0 0 0 3px
   .checks .check { flex: 1 1 calc(50% - 6px); justify-content: center; }
 }
 
-.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.chips:empty { display: none; }
 .chip {
   display: inline-flex;
   align-items: center;
@@ -804,6 +805,18 @@ textarea.short-answer:focus { border-color: var(--accent); box-shadow: 0 0 0 3px
   border-radius: 99px;
   padding: 4px 10px;
 }
+.chip-rm {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--accent-strong);
+  font-size: 14px;
+  line-height: 1;
+  padding: 0 2px;
+  cursor: pointer;
+  opacity: 0.75;
+}
+.chip-rm:hover { opacity: 1; }
 
 a.btn { text-decoration: none; }
 .file-open-link { text-decoration: none; }
