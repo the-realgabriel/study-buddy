@@ -658,7 +658,7 @@ async function extractTextContent(filename: string, raw: Uint8Array): Promise<st
   if (name.endsWith(".pdf")) {
     let text: string;
     try {
-      const pdf = await getDocumentProxy(raw);
+      const pdf = await getDocumentProxy(raw.slice());
       const extracted = await unpdfExtract(pdf, { mergePages: true });
       text = String(extracted.text || "");
     } catch {
@@ -718,6 +718,9 @@ function rowToFile(row: any, includeMeta = false): Dict {
     created_at: row.created_at,
     note_id: row.note_id === null || row.note_id === undefined ? null : Number(row.note_id),
   };
+  if (typeof row.preview_text === "string" && row.preview_text) {
+    file.preview_text = row.preview_text;
+  }
   if (includeMeta) file.r2_key = row.r2_key;
   return file;
 }
@@ -825,7 +828,7 @@ async function listQuizzesForNote(conn: Conn, userId: number, noteId: number): P
 async function listFilesForNote(conn: Conn, userId: number, noteId: number): Promise<{ files: Dict[]; textLength: number }> {
   const rows = await qRows(
     conn,
-    "SELECT id, user_id, note_id, filename, mime, size, created_at, CHAR_LENGTH(COALESCE(text, '')) AS text_len FROM files WHERE user_id = ? AND note_id = ? ORDER BY created_at DESC, id DESC LIMIT 200",
+    "SELECT id, user_id, note_id, filename, mime, size, created_at, LEFT(COALESCE(text, ''), 15000) AS preview_text, CHAR_LENGTH(COALESCE(text, '')) AS text_len FROM files WHERE user_id = ? AND note_id = ? ORDER BY created_at DESC, id DESC LIMIT 200",
     [userId, noteId]
   );
   let textLength = 0;
@@ -921,15 +924,17 @@ async function downloadFile(env: Env, conn: Conn, request: Request, fileId: numb
   const object = await env.FILES.get(file.r2_key);
   if (!object) throw new ApiError(404, "File data is missing.");
   const filenameSafe = file.filename.replace(/[^\x20-\x7E]/g, "_").replace(/"/g, "");
-  return new Response(object.body, {
-    headers: {
-      "Content-Type": file.mime,
-      "Content-Disposition": `inline; filename="${filenameSafe}"`,
-      "Cache-Control": "private, no-store",
-      "X-Content-Type-Options": "nosniff",
-      "Content-Security-Policy": "default-src 'none'; img-src 'self' data: blob:; media-src 'self' data: blob:; style-src 'unsafe-inline'; object-src 'self' blob:; frame-ancestors 'self'",
-    },
-  });
+  const headers: Record<string, string> = {
+    "Content-Type": file.mime,
+    "Content-Disposition": `inline; filename="${filenameSafe}"`,
+    "Content-Length": String(object.size || file.size || 0),
+    "Accept-Ranges": "bytes",
+    "Cache-Control": "private, max-age=300",
+  };
+  if (file.mime !== "application/pdf") {
+    headers["X-Content-Type-Options"] = "nosniff";
+  }
+  return new Response(object.body, { headers });
 }
 
 async function handleApi(request: Request, env: Env): Promise<Response> {
@@ -1238,7 +1243,8 @@ async function route(conn: Conn, env: Env, method: string, path: string, data: D
     } catch {
       throw new ApiError(400, "Could not decode the uploaded file.");
     }
-    if (raw.length > 15 * 1024 * 1024) {
+    const byteSize = raw.byteLength;
+    if (byteSize > 15 * 1024 * 1024) {
       throw new ApiError(413, "That file is too large (limit 15 MB).");
     }
     const mime = mimeFor(filename);
@@ -1271,13 +1277,13 @@ async function route(conn: Conn, env: Env, method: string, path: string, data: D
       const row = await qRun(
         conn,
         "INSERT INTO files (user_id, note_id, filename, mime, text, size, r2_key, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        [user.userId, noteId, filename, mime, text, raw.length, key, now()]
+        [user.userId, noteId, filename, mime, text, byteSize, key, now()]
       );
       return json({
         id: row.insertId,
         filename,
         mime,
-        size: raw.length,
+        size: byteSize,
         note_id: noteId,
         text,
         truncated,

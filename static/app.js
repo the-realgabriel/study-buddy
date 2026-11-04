@@ -348,6 +348,16 @@ function renderNoteView() {
   $$(".delete-file-btn").forEach((button) => {
     button.addEventListener("click", () => deleteStoredFile(Number(button.dataset.id)));
   });
+  $$("details.file-embed").forEach((details) => {
+    details.addEventListener("toggle", () => {
+      if (details.open) {
+        const frame = $("iframe[data-src]", details);
+        if (frame && !frame.getAttribute("src")) {
+          frame.setAttribute("src", frame.dataset.src);
+        }
+      }
+    });
+  });
 }
 
 async function deleteStoredFile(fileId) {
@@ -378,31 +388,53 @@ async function deleteQuiz(quizId) {
   }
 }
 
+function formatBytes(bytes) {
+  const n = Number(bytes || 0);
+  if (n >= 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(2)} MB`;
+  if (n > 0) return `${Math.max(0.1, n / 1024).toFixed(1)} KB`;
+  return "";
+}
+
 function renderFiles(files) {
   if (!Array.isArray(files) || !files.length) return "";
   const token = encodeURIComponent(localStorage.getItem(TOKEN_KEY) || "");
   return `
     <section class="saved-quizzes">
-      <div class="section-head"><h3>Files</h3></div>
+      <div class="section-head"><h3>Files (${files.length})</h3></div>
       ${files
-        .map((file) => {
-          const previewable = file.mime === "application/pdf";
+        .map((file, idx) => {
+          const isPdf = file.mime === "application/pdf";
+          const hasText = Boolean(file.preview_text && String(file.preview_text).trim());
           const src = `/api/files/${file.id}/download?token=${token}`;
+          const sizeStr = formatBytes(file.size);
+          const openAttr = idx === 0 ? " open" : "";
+          let previewBody = "";
+          if (isPdf) {
+            previewBody = `
+              <details class="file-embed"${openAttr} data-src="${src}">
+                <summary>Preview PDF</summary>
+                <iframe title="${esc(file.filename)}" ${idx === 0 ? `src="${src}"` : `data-src="${src}"`}></iframe>
+              </details>`;
+          } else if (hasText) {
+            previewBody = `
+              <details class="file-embed"${openAttr}>
+                <summary>Preview content</summary>
+                <div class="file-text-preview">${esc(file.preview_text)}</div>
+              </details>`;
+          }
           return `
           <div class="file-block">
             <div class="quiz-row">
               <div class="quiz-row-main">
                 <div class="quiz-row-title">${esc(file.filename)}</div>
-                <div class="quiz-row-meta">${escapeMime(file.mime)} · ${(file.size / 1024).toFixed(1)} KB · ${esc(formatDate(file.created_at))}${previewable ? "" : " · open to view"}</div>
+                <div class="quiz-row-meta">${escapeMime(file.mime)}${sizeStr ? ` · ${sizeStr}` : ""} · ${esc(formatDate(file.created_at))}</div>
               </div>
               <div class="quiz-row-actions">
-                <a class="btn small ghost file-open-link" href="${src}" target="_blank" rel="noopener">Open</a>
+                <a class="btn small ghost file-open-link" href="${src}" target="_blank" rel="noopener">${isPdf ? "Open PDF" : "Download"}</a>
                 <button class="btn small ghost delete-file-btn" data-id="${file.id}">Delete</button>
               </div>
             </div>
-            ${previewable
-              ? `<details class="file-embed" open><summary>Preview</summary><iframe loading="lazy" title="${esc(file.filename)}" src="${src}"></iframe></details>`
-              : ""}
+            ${previewBody}
           </div>`;
         })
         .join("")}
