@@ -10,6 +10,116 @@ const esc = (value) =>
     "'": "&#39;",
   }[char]));
 
+const PUA_MAP = {
+  0xf020: " ", 0xf021: "!", 0xf022: "∀", 0xf023: "#", 0xf024: "∃", 0xf025: "%",
+  0xf026: "&", 0xf027: "∋", 0xf028: "(", 0xf029: ")", 0xf02a: "∗", 0xf02b: "+",
+  0xf02c: ",", 0xf02d: "−", 0xf02e: ".", 0xf02f: "/", 0xf030: "0", 0xf031: "1",
+  0xf032: "2", 0xf033: "3", 0xf034: "4", 0xf035: "5", 0xf036: "6", 0xf037: "7",
+  0xf038: "8", 0xf039: "9", 0xf03a: ":", 0xf03b: ";", 0xf03c: "<", 0xf03d: "=",
+  0xf03e: ">", 0xf03f: "?", 0xf040: "≅",
+  0xf041: "Α", 0xf042: "Β", 0xf043: "Χ", 0xf044: "Δ", 0xf045: "Ε", 0xf046: "Φ",
+  0xf047: "Γ", 0xf048: "Η", 0xf049: "Ι", 0xf04a: "ϑ", 0xf04b: "Κ", 0xf04c: "Λ",
+  0xf04d: "Μ", 0xf04e: "Ν", 0xf04f: "Ο", 0xf050: "Π", 0xf051: "Θ", 0xf052: "Ρ",
+  0xf053: "Σ", 0xf054: "Τ", 0xf055: "Υ", 0xf056: "ς", 0xf057: "Ω", 0xf058: "Ξ",
+  0xf059: "Ψ", 0xf05a: "Ζ", 0xf05b: "[", 0xf05c: "∴", 0xf05d: "]", 0xf05e: "⊥",
+  0xf05f: "_", 0xf061: "α", 0xf062: "β", 0xf063: "χ", 0xf064: "δ", 0xf065: "ε",
+  0xf066: "φ", 0xf067: "γ", 0xf068: "η", 0xf069: "ι", 0xf06a: "ϕ", 0xf06b: "κ",
+  0xf06c: "λ", 0xf06d: "μ", 0xf06e: "ν", 0xf06f: "ο", 0xf070: "π", 0xf071: "θ",
+  0xf072: "ρ", 0xf073: "σ", 0xf074: "τ", 0xf075: "•", 0xf076: "ϖ", 0xf077: "ω",
+  0xf078: "ξ", 0xf079: "ψ", 0xf07a: "ζ", 0xf07b: "{", 0xf07c: "|", 0xf07d: "}",
+  0xf07e: "∼", 0xf0a2: "′", 0xf0a3: "≤", 0xf0a4: "⁄", 0xf0a5: "∞", 0xf0a6: "ƒ",
+  0xf0a7: "•", 0xf0ab: "↔", 0xf0ac: "←", 0xf0ad: "↑", 0xf0ae: "→", 0xf0af: "↓",
+  0xf0b0: "°", 0xf0b1: "±", 0xf0b2: "″", 0xf0b3: "≥", 0xf0b4: "•", 0xf0b5: "∝",
+  0xf0b6: "∂", 0xf0b7: "•", 0xf0b8: "÷", 0xf0b9: "≠", 0xf0ba: "≡", 0xf0bb: "≈",
+  0xf0bc: "…", 0xf0c4: "⊗", 0xf0c5: "⊕", 0xf0c6: "∅", 0xf0c7: "∩", 0xf0c8: "∪",
+  0xf0c9: "⊃", 0xf0ca: "⊇", 0xf0cb: "⊄", 0xf0cc: "⊂", 0xf0cd: "⊆", 0xf0ce: "∈",
+  0xf0cf: "∉", 0xf0d0: "∠", 0xf0d1: "∇", 0xf0d2: "®", 0xf0d3: "©", 0xf0d4: "™",
+  0xf0d5: "∏", 0xf0d6: "√", 0xf0d7: "·", 0xf0d8: "¬", 0xf0d9: "∧", 0xf0da: "∨",
+  0xf0db: "⇔", 0xf0dc: "⇐", 0xf0dd: "⇑", 0xf0de: "⇒", 0xf0df: "⇓", 0xf0e0: "◊",
+  0xf0e1: "⟨", 0xf0e3: "©", 0xf0e5: "∑", 0xf0f0: "⇒", 0xf0f1: "⟩", 0xf0f2: "∫",
+};
+
+function normalizeMathText(value) {
+  return String(value ?? "")
+    .replace(/[\uE000-\uF8FF]/g, (ch) => PUA_MAP[ch.charCodeAt(0)] ?? "•")
+    .replace(/\x08(eta|egin|ar|inom|f|ig|mod|oxed)/g, "\\b$1")
+    .replace(/\x0c(rac|orall|lat)/g, "\\f$1")
+    .replace(/\t(heta|imes|an|au|ext|o|riangle|ilde|op)/g, "\\t$1")
+    .replace(/\r(ho|ight|Math)/g, "\\r$1");
+}
+
+function renderTeX(tex, displayMode) {
+  const clean = tex.trim();
+  if (!clean) return "";
+  if (window.katex && typeof window.katex.renderToString === "function") {
+    try {
+      return window.katex.renderToString(clean, {
+        displayMode: Boolean(displayMode),
+        throwOnError: false,
+        strict: false,
+      });
+    } catch (error) {
+      /* fallback below */
+    }
+  }
+  return `<code class="math-fallback">${esc(clean)}</code>`;
+}
+
+function renderRich(value, inline = false) {
+  let text = normalizeMathText(value);
+  if (!text) return "";
+  const slots = [];
+  const stash = (html) => {
+    const token = `\u0000M${slots.length}\u0000`;
+    slots.push(html);
+    return token;
+  };
+
+  // 1) Stash fenced code blocks first so $ inside code isn't treated as math
+  if (!inline) {
+    text = text.replace(/```([a-zA-Z0-9_-]*)\n([\s\S]*?)```/g, (_, _lang, code) =>
+      stash(`<pre class="rich-pre"><code>${esc(code.replace(/\n$/, ""))}</code></pre>`)
+    );
+  }
+  text = text.replace(/`([^`\n]+)`/g, (_, code) => stash(`<code class="rich-code">${esc(code)}</code>`));
+
+  // 2) Stash display math ($$...$$ and \[...\]) and inline math ($...$ and \(...\))
+  text = text.replace(/\$\$([\s\S]+?)\$\$/g, (_, tex) => stash(renderTeX(tex, !inline)));
+  text = text.replace(/\\\[([\s\S]+?)\\\]/g, (_, tex) => stash(renderTeX(tex, !inline)));
+  text = text.replace(/\\\(([\s\S]+?)\\\)/g, (_, tex) => stash(renderTeX(tex, false)));
+  text = text.replace(/(?<!\$)\$(?!\$)([^\$\n]+?)\$(?!\$)/g, (_, tex) => stash(renderTeX(tex, false)));
+
+  // 3) Also render standalone bare LaTeX expressions like \frac{...}{...} or \sqrt{...}
+  text = text.replace(/\\(?:frac\{[^{}]+\}\{[^{}]+\}|sqrt\{[^{}]+\}|begin\{[a-z]+matrix\}[\s\S]+?\\end\{[a-z]+matrix\})/g, (tex) =>
+    stash(renderTeX(tex, false))
+  );
+
+  // 4) Escape remaining HTML
+  let out = esc(text);
+
+  // 5) Subscripts/superscripts in plain math notation (e.g. x_1, q_0, x_{k+1}, x^2, Σ^*)
+  out = out.replace(/\b([a-zA-Zα-ωΑ-ΩδΣΠΔθϕ])_\{([^}<>&]{1,12})\}/g, "$1<sub>$2</sub>");
+  out = out.replace(/\b([a-zA-Zα-ωΑ-ΩδΣΠΔθϕ])_([0-9a-zA-Z]{1,3})\b/g, "$1<sub>$2</sub>");
+  out = out.replace(/([a-zA-Z0-9α-ωΑ-ΩδΣΠΔθϕ\)\]])\^\{([^}<>&]{1,12})\}/g, "$1<sup>$2</sup>");
+  out = out.replace(/([a-zA-Z0-9α-ωΑ-ΩδΣΠΔθϕ\)\]])\^([0-9a-zA-Z\*\+]{1,3})(?![a-zA-Z0-9])/g, "$1<sup>$2</sup>");
+
+  // 6) Bold and italic Markdown
+  out = out.replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>");
+  out = out.replace(/(?<!\*)\*([^\*\n]+)\*(?!\*)/g, "<em>$1</em>");
+
+  // 7) Block-level formatting when not inline
+  if (!inline) {
+    out = out
+      .replace(/^###\s+(.+)$/gm, '<h4 class="rich-h">$1</h4>')
+      .replace(/^##\s+(.+)$/gm, '<h3 class="rich-h">$1</h3>')
+      .replace(/^#\s+(.+)$/gm, '<h3 class="rich-h">$1</h3>');
+  }
+
+  // 8) Restore stashed math & code
+  out = out.replace(/\u0000M(\d+)\u0000/g, (_, idx) => slots[Number(idx)] || "");
+  return out;
+}
+
 const state = {
   notes: [],
   note: null,
@@ -334,7 +444,7 @@ function renderNoteView() {
     </div>
     ${renderFiles(note.files)}
     ${quizzesSection}
-    ${note.content ? `<div class="note-content">${esc(note.content)}</div>` : ""}`;
+    ${note.content ? `<div class="note-content">${renderRich(note.content, false)}</div>` : ""}`;
   $("#genOpenBtn").addEventListener("click", openGenerator);
   $("#tutorOpenBtn").addEventListener("click", () => openTutor(note));
   $("#editNoteBtn").addEventListener("click", () => openNoteModal(note));
@@ -419,7 +529,7 @@ function renderFiles(files) {
             previewBody = `
               <details class="file-embed"${openAttr}>
                 <summary>Preview content</summary>
-                <div class="file-text-preview">${esc(file.preview_text)}</div>
+                <div class="file-text-preview">${renderRich(file.preview_text, false)}</div>
               </details>`;
           }
           return `
@@ -460,7 +570,7 @@ function questionCard(question, index) {
         <label class="option">
           <input type="radio" name="q${index}" value="${optionIndex}">
           <span class="letter">${letters[optionIndex] || optionIndex + 1}</span>
-          <span>${esc(option)}</span>
+          <span>${renderRich(option, true)}</span>
         </label>`
       )
       .join("")}</div>`;
@@ -475,7 +585,7 @@ function questionCard(question, index) {
   return `
     <div class="qcard">
       <div class="qmeta"><span class="qnum">Question ${index + 1}</span>${typeBadge(question.type)}</div>
-      <p class="qtext">${esc(question.question)}</p>
+      <div class="qtext">${renderRich(question.question, false)}</div>
       ${body}
     </div>`;
 }
@@ -627,13 +737,13 @@ function resultItem(result) {
         <span class="result-tag">${result.correct ? "Correct" : "Incorrect"}</span>
         ${typeBadge(result.type)}
       </div>
-      <p class="result-q">${esc(result.question)}</p>
+      <div class="result-q">${renderRich(result.question, false)}</div>
       <dl class="answer-row">
-        <dt>Your answer</dt><dd>${esc(result.student_answer || "—")}</dd>
-        <dt>Correct answer</dt><dd>${esc(result.correct_answer)}</dd>
+        <dt>Your answer</dt><dd>${renderRich(result.student_answer || "—", true)}</dd>
+        <dt>Correct answer</dt><dd>${renderRich(result.correct_answer, true)}</dd>
       </dl>
-      ${result.explanation ? `<div class="explain">${esc(result.explanation)}</div>` : ""}
-      ${result.feedback ? `<div class="feedback">${esc(result.feedback)}</div>` : ""}
+      ${result.explanation ? `<div class="explain">${renderRich(result.explanation, false)}</div>` : ""}
+      ${result.feedback ? `<div class="feedback">${renderRich(result.feedback, false)}</div>` : ""}
     </div>`;
 }
 
@@ -842,7 +952,7 @@ function renderTutor() {
   const noteTitle = state.note && state.note.id === t.noteId ? state.note.title : "";
   const chatHtml = t.messages.length
     ? `<div class="chat-scroll" id="chatScroll">${t.messages
-        .map((m) => `<div class="msg ${m.role}"><div class="msg-body">${esc(m.content)}</div></div>`)
+        .map((m) => `<div class="msg ${m.role}"><div class="msg-body">${renderRich(m.content, false)}</div></div>`)
         .join("")}</div>`
     : `<div class="chat-empty">Ask anything about this note. The tutor answers only from what is written here.</div>`;
   $("#view").innerHTML = `

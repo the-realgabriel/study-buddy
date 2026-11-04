@@ -877,11 +877,48 @@ a.btn { text-decoration: none; }
   border: 1px solid var(--border-soft);
   border-radius: 10px;
   padding: 16px 18px;
-  font-size: 13.5px;
-  line-height: 1.65;
+  font-size: 14px;
+  line-height: 1.7;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   max-height: 420px;
   overflow-y: auto;
-  color: #333338;
+  color: #2c2c31;
 }
+
+.katex { font-size: 1.05em; }
+.katex-display {
+  margin: 10px 0;
+  padding: 6px 2px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  max-width: 100%;
+}
+.rich-code, .math-fallback {
+  font-family: "SF Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.9em;
+  background: rgba(15, 15, 15, 0.06);
+  padding: 1.5px 5px;
+  border-radius: 5px;
+}
+.msg.user .rich-code, .msg.user .math-fallback {
+  background: rgba(255, 255, 255, 0.16);
+}
+.rich-pre {
+  margin: 8px 0;
+  padding: 10px 12px;
+  background: #161618;
+  color: #f4f4f6;
+  border-radius: 8px;
+  font-family: "SF Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12.5px;
+  line-height: 1.5;
+  overflow-x: auto;
+}
+.rich-h {
+  margin: 10px 0 4px;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--ink);
+}
+sub, sup { font-size: 0.76em; line-height: 0; }
