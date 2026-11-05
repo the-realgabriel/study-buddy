@@ -524,7 +524,12 @@ function renderFiles(files) {
               <details class="file-embed"${openAttr} data-src="${src}">
                 <summary>Preview PDF</summary>
                 <iframe title="${esc(file.filename)}" ${idx === 0 ? `src="${src}"` : `data-src="${src}"`}></iframe>
-              </details>`;
+              </details>
+              ${hasText ? `
+              <details class="file-embed">
+                <summary>Read extracted text</summary>
+                <div class="file-text-preview">${renderRich(file.preview_text, false)}</div>
+              </details>` : ""}`;
           } else if (hasText) {
             previewBody = `
               <details class="file-embed"${openAttr}>
